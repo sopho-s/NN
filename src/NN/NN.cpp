@@ -1,10 +1,15 @@
 #include <iostream>
 #include <stdlib.h>
+#include <fstream>
+#include <sstream>
+#include <vector>
 
 using namespace std;
 
 // defining all global variables
 const int MSE = 0;
+const int ACCURACY = 1;
+const int LOSS = 2;
 const int LINEAR = 0;
 const int RELU = 1;
 const int SIGMOID = 2;
@@ -32,6 +37,21 @@ float** Transpose(float* arr[], int col, int row) {
 	return result;
 }
 
+void WriteAccuracy(float* acc, int amount)
+{
+	ofstream CSV;
+	CSV.open("accuracy.csv");
+	for (int i = 0; i < amount; i++) {
+		if (i != 0) {
+			CSV << ",\n";
+		}
+		stringstream string;
+		string << acc[i];
+		CSV << string.str();
+	}
+	CSV.close();
+}
+
 class Layer {
 private:
 	float** weights;
@@ -43,6 +63,8 @@ private:
 	int activation;
 	float* layercost;
 	float alpha;
+	float decay;
+	float* lastcost;
 public:
 	int input;
 	int output;
@@ -50,7 +72,7 @@ public:
 	Layer() {
 		;
 	}
-	Layer(int input, int output, int activation = LINEAR, float alpha = 0.01) {
+	Layer(int input, int output, int activation = LINEAR, float alpha = 0.001, float decay = 0.0001) {
 		this->inputstore = new float[input];
 		this->resultstore = new float[output];
 		this->input = input;
@@ -62,6 +84,7 @@ public:
 		this->activation = activation;
 		this->layercost = new float[input]();
 		this->alpha = alpha;
+		this->decay = decay;
 		for (int i = 0; i < input; i++) {
 			this->weights[i] = new float[output];
 			this->weightsup[i] = new float[output]();
@@ -73,7 +96,7 @@ public:
 			}
 		}
 	}
-	Layer(int input, int output, float** weights, float* biases, int activation = LINEAR, float alpha = 0.01) {
+	Layer(int input, int output, float** weights, float* biases, int activation = LINEAR, float alpha = 0.01, float decay = 0.001) {
 		this->inputstore = new float[input];
 		this->resultstore = new float[output];
 		this->input = input;
@@ -85,6 +108,7 @@ public:
 		this->activation = activation;
 		this->layercost = new float[input]();
 		this->alpha = alpha;
+		this->decay = decay;
 		for (int i = 0; i < input; i++) {
 			this->weights[i] = new float[output];
 			this->weightsup[i] = new float[output]();
@@ -111,6 +135,7 @@ public:
 			result[i] += this->biases[i];
 			this->resultstore[i] = result[i];
 		}
+		// applies activation function
 		switch (this->activation) {
 		case LINEAR:
 			break;
@@ -164,17 +189,18 @@ public:
 		}
 		return newcost;
 	}
-	void Update() {
+	void Update(int batchsize) {
 		for (int i = 0; i < output; i++) {
-			this->biases[i] -= this->alpha * this->biasesup[i];
+			this->biases[i] -= this->alpha * this->biasesup[i] / batchsize;
 			this->biasesup[i] = 0;
 		}
 		for (int i = 0; i < input; i++) {
 			for (int t = 0; t < output; t++) {
-				this->weights[i][t] -= this->alpha * this->weightsup[i][t];
+				this->weights[i][t] -= this->alpha * this->weightsup[i][t] / batchsize;
 				this->weightsup[i][t] = 0;
 			}
 		}
+		this->alpha = this->alpha * (1 - this->decay);
 	}
 	float** GetWeightChange() {
 		return this->weightsup;
@@ -190,22 +216,26 @@ private:
 	int layeram;
 	float* result;
 	float* cost;
+	float* lastdcost;
 	float* dcost;
 	int costfunc;
 	int accuracyfunc;
 	int out;
 	int largestlayersize;
+	float momentum;
 public:
-	Network(Layer* layers, int layeram, int costfunc = MSE, int accuracyfunc = MSE) {
+	Network(Layer* layers, int layeram, int costfunc = MSE, int accuracyfunc = MSE, float momentum = 0.8) {
 		this->layers = layers;
 		this->layeram = layeram;
 		this->out = layers[layeram - 1].output;
 		this->result = new float[this->out];
 		this->cost = new float[this->out];
+		this->lastdcost = new float[this->out]();
 		this->dcost = new float[this->out];
 		this->costfunc = costfunc;
 		this->accuracyfunc = accuracyfunc;
 		this->largestlayersize = 0;
+		this->momentum = momentum;
 		for (int i = 0; i < this->layeram; i++) {
 			if (this->largestlayersize < this->layers[i].input) {
 				this->largestlayersize = this->layers[i].input;
@@ -244,6 +274,14 @@ public:
 				this->cost[i] = temp * temp;
 			}
 			break;
+		case ACCURACY:
+			for (int i = 0; i < this->out; i++) {
+				this->cost[i] = ((result[i] - truevals[i]) * (result[i] - truevals[i]) < 0.25) ? 1 : 0;
+			}
+		case LOSS:
+			for (int i = 0; i < this->out; i++) {
+				this->cost[i] = abs(result[i] - truevals[i]);
+			}
 		}
 		return this->cost;
 	}
@@ -255,6 +293,10 @@ public:
 				this->dcost[i] = 2 * (result[i] - truevals[i]);
 			}
 			break;
+		}
+		for (int i = 0; i < this->out; i++) {
+			this->dcost[i] += this->momentum * this->lastdcost[i];
+			this->lastdcost[i] = this->dcost[i];
 		}
 		return this->dcost;
 	}
@@ -271,16 +313,15 @@ public:
 		}
 		delete[] ccost;
 	}
-	void Update() {
+	void Update(int batchsize = 1) {
 		for (int i = this->layeram - 1; i >= 0; i--) {
-			this->layers[i].Update();
+			this->layers[i].Update(batchsize);
 		}
 	}
 	float Accuracy(float** inputs, float** trues, int inpsize, int outsize, int inpamount) {
 		float sumcost = 0;
 		float* input = new float[0];
 		float* _true = new float[0];
-		float* tempcost = new float[0];
 		for (int i = 0; i < inpamount; i++) {
 			input = new float[inpsize];
 			for (int t = 0; t < inpsize; t++) {
@@ -291,29 +332,46 @@ public:
 				_true[t] = trues[i][t];
 			}
 			this->Pass(input);
-			tempcost = this->CalculateCost(_true, this->accuracyfunc);
+			float* tempcost = this->CalculateCost(_true, this->accuracyfunc);
 			for (int t = 0; t < outsize; t++) {
 				sumcost += tempcost[t];
 			}
 		}
 		return sumcost / inpamount;
 	}
-	void Train(float** inputs, float** trues, int inpsize, int outsize, int inpamount, int epochs) {
+	void Train(float** inputs, float** trues, int inpsize, int outsize, int inpamount, int epochs, int minibatch = 1, int batchsize = 1, int itersize = 1) {
 		float* input = new float[inpsize];
 		float* _true = new float[outsize];
+		float** batchinput = new float* [batchsize];
+		float** batchtrue = new float* [batchsize];
 		for (int epoch = 0; epoch < epochs; epoch++) {
-			int r = rand() % inpamount;
+			if (batchsize != 1 && epoch % itersize == 0) {
+				for (int i = 0; i < batchsize; i++) {
+					batchinput[i] = new float[inpsize];
+					batchtrue[i] = new float[outsize];
+					int r = rand() % inpamount;
+					for (int t = 0; t < inpsize; t++) {
+						batchinput[i][t] = inputs[r][t];
+					}
+					for (int t = 0; t < outsize; t++) {
+						batchtrue[i][t] = trues[r][t];
+					}
+				}
+			}
+			int r = rand() % batchsize;
 			for (int i = 0; i < inpsize; i++) {
-				input[i] = inputs[r][i];
+				input[i] = batchinput[r][i];
 			}
 			for (int i = 0; i < outsize; i++) {
-				_true[i] = trues[r][i];
+				_true[i] = batchtrue[r][i];
 			}
 			float* out = this->Pass(input);
 			delete[] out;
 			this->CalculateDCost(_true);
 			this->BackPropagate();
-			this->Update();
+			if (epoch % minibatch == 0) {
+				this->Update(minibatch);
+			}
 		}
 	}
 	int GetLayerAm() {
