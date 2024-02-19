@@ -103,10 +103,13 @@ private:
 	int activation;
 	float* layercost;
 	float alpha;
-	float decay;
+	float epsilon;
 	float* lastcost;
 	float L1;
 	float L2;
+	float squaredgradsum;
+	float rho;
+	float decay;
 public:
 	int input;
 	int output;
@@ -115,7 +118,7 @@ public:
 	Layer() {
 		;
 	}
-	Layer(int input, int output, int activation = LINEAR, float alpha = 0.001, float decay = 0.0001, float momentum = 0, float L1 = 0, float L2 = 0) {
+	Layer(int input, int output, int activation = LINEAR, float alpha = 0.001, float epsilon = 1e-8, float rho = 1e-7, float momentum = 0, float L1 = 0, float L2 = 0, float decay = 1e-7) {
 		this->inputstore = new float[input];
 		this->resultstore = new float[output];
 		this->input = input;
@@ -129,10 +132,13 @@ public:
 		this->activation = activation;
 		this->layercost = new float[input]();
 		this->alpha = alpha;
-		this->decay = decay;
+		this->epsilon = epsilon;
 		this->momentum = momentum;
 		this->L1 = L1;
 		this->L2 = L2;
+		this->squaredgradsum = 0;
+		this->rho = rho;
+		this->decay = decay;
 		for (int i = 0; i < input; i++) {
 			this->weights[i] = new float[output];
 			this->weightsup[i] = new float[output]();
@@ -145,7 +151,7 @@ public:
 			}
 		}
 	}
-	Layer(int input, int output, float** weights, float* biases, int activation = LINEAR, float alpha = 0.01, float decay = 0.001, float momentum = 0, float L1 = 0, float L2 = 0) {
+	Layer(int input, int output, float** weights, float* biases, int activation = LINEAR, float alpha = 0.01, float epsilon = 1e-8, float rho = 1e-7, float momentum = 0, float L1 = 0, float L2 = 0, float decay = 1e-7) {
 		this->inputstore = new float[input];
 		this->resultstore = new float[output];
 		this->input = input;
@@ -159,10 +165,13 @@ public:
 		this->activation = activation;
 		this->layercost = new float[input]();
 		this->alpha = alpha;
-		this->decay = decay;
+		this->epsilon = epsilon;
 		this->momentum = momentum;
 		this->L1 = L1;
 		this->L2 = L2;
+		this->rho = rho;
+		this->squaredgradsum = 0;
+		this->decay = decay;
 		for (int i = 0; i < input; i++) {
 			this->weights[i] = new float[output];
 			this->weightsup[i] = new float[output]();
@@ -259,6 +268,10 @@ public:
 			}
 			break;
 		}
+		this->squaredgradsum = (1 - this->rho) * this->squaredgradsum;
+		for (int i = 0; i < output; i++) {
+			this->squaredgradsum += this->rho * pow(cost[i], 2);
+		}
 		// transposes the weights so that they can be used to calculate the new costs
 		float** transposedw = Transpose(this->weights, this->output, this->input);
 		// calculates the new costs and the update of the weights
@@ -278,8 +291,9 @@ public:
 	}
 	void Update(int batchsize) {
 		float change = 0;
+		float step = this->alpha / (this->epsilon + sqrt(this->squaredgradsum));
 		for (int i = 0; i < output; i++) {
-			change = this->alpha * this->biasesup[i] / batchsize + this->momentum * this->lastbiasesup[i];
+			change = step * this->biasesup[i] / batchsize + this->momentum * this->lastbiasesup[i];
 			if (this->biases[i] > 0) {
 				change += L1;
 			}
@@ -293,7 +307,7 @@ public:
 		}
 		for (int i = 0; i < input; i++) {
 			for (int t = 0; t < output; t++) {
-				change = this->alpha * this->weightsup[i][t] / batchsize + this->momentum * this->lastweightsup[i][t];
+				change = step * this->weightsup[i][t] / batchsize + this->momentum * this->lastweightsup[i][t];
 				if (this->weights[i][t] > 0) {
 					change += L1;
 				}
