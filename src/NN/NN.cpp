@@ -110,6 +110,7 @@ private:
 	float squaredgradsum;
 	float rho;
 	float decay;
+	float dropchance;
 public:
 	int input;
 	int output;
@@ -118,7 +119,7 @@ public:
 	Layer() {
 		;
 	}
-	Layer(int input, int output, int activation = LINEAR, float alpha = 0.001, float epsilon = 1e-8, float rho = 1e-7, float momentum = 0, float L1 = 0, float L2 = 0, float decay = 1e-7) {
+	Layer(int input, int output, int activation = LINEAR, float alpha = 0.001, float epsilon = 1e-8, float rho = 1e-7, float momentum = 0, float L1 = 0, float L2 = 0, float decay = 1e-7, float dropchance = 0) {
 		this->inputstore = new float[input];
 		this->resultstore = new float[output];
 		this->input = input;
@@ -139,6 +140,7 @@ public:
 		this->squaredgradsum = 0;
 		this->rho = rho;
 		this->decay = decay;
+		this->dropchance = dropchance;
 		for (int i = 0; i < input; i++) {
 			this->weights[i] = new float[output];
 			this->weightsup[i] = new float[output]();
@@ -172,6 +174,7 @@ public:
 		this->rho = rho;
 		this->squaredgradsum = 0;
 		this->decay = decay;
+		this->dropchance = dropchance;
 		for (int i = 0; i < input; i++) {
 			this->weights[i] = new float[output];
 			this->weightsup[i] = new float[output]();
@@ -189,7 +192,12 @@ public:
 	float* GetBiases() {
 		return this->biases;
 	}
-	float* Pass(float* inputs) {
+	float* Pass(float* inputs, bool intraining) {
+		for (int i = 0; i < this->input; i++) {
+			if (static_cast <float> (rand()) / static_cast <float> (RAND_MAX) < dropchance) {
+				inputs[i] = 0;
+			}
+		}
 		for (int i = 0; i < this->input; i++) {
 			this->inputstore[i] = inputs[i];
 		}
@@ -364,14 +372,14 @@ public:
 			}
 		}
 	}
-	float* Pass(float* inputs) {
+	float* Pass(float* inputs, bool intraining) {
 		float* results = new float[this->layers[0].input];
 		for (int i = 0; i < this->layers[0].input; i++) {
 			results[i] = inputs[i];
 		}
 		// loops through the layers in the network
 		for (int i = 0; i < this->layeram; i++) {
-			float* tempresults = this->layers[i].Pass(results);
+			float* tempresults = this->layers[i].Pass(results, intraining);
 			delete[] results;
 			results = new float[this->layers[i].output]();
 			for (int t = 0; t < this->layers[i].output; t++) {
@@ -513,7 +521,7 @@ public:
 			for (int t = 0; t < outsize; t++) {
 				_true[t] = trues[i][t];
 			}
-			float* out = this->Pass(input);
+			float* out = this->Pass(input, false);
 			float* tempcost = this->CalculateAccuracy(_true);
 			if (this->accuracyfunc != ACCURACY) {
 				for (int t = 0; t < outsize; t++) {
@@ -539,7 +547,7 @@ public:
 			for (int i = 0; i < outsize; i++) {
 				_true[i] = trues[r][i];
 			}
-			float* out = this->Pass(input);
+			float* out = this->Pass(input, true);
 			delete[] out;
 			this->CalculateDCost(_true);
 			this->BackPropagate();
