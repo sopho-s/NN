@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <math.h>
 
 using namespace std;
 
@@ -10,10 +11,12 @@ using namespace std;
 const int MSE = 0;
 const int ACCURACY = 1;
 const int LOSS = 2;
+const int BCE = 3;
 const int LINEAR = 0;
 const int RELU = 1;
 const int SIGMOID = 2;
 const int LEAKYRELU = 3;
+const int SOFTMAX = 4;
 
 // unoptimized code, fix
 float* Dot(float* input, float* weights[], int in, int out) {
@@ -53,6 +56,40 @@ void WriteAccuracy(float* acc, int amount)
 	CSV.close();
 }
 
+vector<vector<float>> Normalise(vector<vector<float>> data) {
+	vector<vector<float>> output;
+	vector<float> maxes;
+	for (int i = 0; i < data[0].size(); i++) {
+		maxes.push_back(data[0][i]);
+	}
+	vector<float> mins;
+	for (int i = 0; i < data[0].size(); i++) {
+		mins.push_back(data[0][i]);
+	}
+	// finds maxes and mins
+	for (int i = 1; i < data.size(); i++) {
+		for (int t = 0; t < data[i].size(); t++) {
+			if (maxes[t] < data[i][t]) {
+				maxes[t] = data[i][t];
+			}
+			if (mins[t] > data[i][t]) {
+				mins[t] = data[i][t];
+			}
+		}
+	}
+	output.push_back(maxes);
+	output.push_back(mins);
+	// normalises all the data
+	for (int i = 0; i < data.size(); i++) {
+		vector<float> temp = {};
+		for (int t = 0; t < data[i].size(); t++) {
+			temp.push_back((data[i][t] - mins[t]) / (maxes[t] - mins[t]));
+		}
+		output.push_back(temp);
+	}
+	return output;
+}
+
 class Layer {
 private:
 	float** weights;
@@ -68,6 +105,8 @@ private:
 	float alpha;
 	float decay;
 	float* lastcost;
+	float L1;
+	float L2;
 public:
 	int input;
 	int output;
@@ -76,7 +115,7 @@ public:
 	Layer() {
 		;
 	}
-	Layer(int input, int output, int activation = LINEAR, float alpha = 0.001, float decay = 0.0001, float momentum = 0) {
+	Layer(int input, int output, int activation = LINEAR, float alpha = 0.001, float decay = 0.0001, float momentum = 0, float L1 = 0, float L2 = 0) {
 		this->inputstore = new float[input];
 		this->resultstore = new float[output];
 		this->input = input;
@@ -92,6 +131,8 @@ public:
 		this->alpha = alpha;
 		this->decay = decay;
 		this->momentum = momentum;
+		this->L1 = L1;
+		this->L2 = L2;
 		for (int i = 0; i < input; i++) {
 			this->weights[i] = new float[output];
 			this->weightsup[i] = new float[output]();
@@ -104,7 +145,7 @@ public:
 			}
 		}
 	}
-	Layer(int input, int output, float** weights, float* biases, int activation = LINEAR, float alpha = 0.01, float decay = 0.001, float momentum = 0) {
+	Layer(int input, int output, float** weights, float* biases, int activation = LINEAR, float alpha = 0.01, float decay = 0.001, float momentum = 0, float L1 = 0, float L2 = 0) {
 		this->inputstore = new float[input];
 		this->resultstore = new float[output];
 		this->input = input;
@@ -120,6 +161,8 @@ public:
 		this->alpha = alpha;
 		this->decay = decay;
 		this->momentum = momentum;
+		this->L1 = L1;
+		this->L2 = L2;
 		for (int i = 0; i < input; i++) {
 			this->weights[i] = new float[output];
 			this->weightsup[i] = new float[output]();
@@ -170,6 +213,15 @@ public:
 				result[i] = 1 / (1 + exp(-result[i]));
 			}
 			break;
+		case SOFTMAX:
+			float expsum = 0;
+			for (int i = 0; i < output; i++) {
+				expsum += exp(result[i]);
+			}
+			for (int i = 0; i < output; i++) {
+				result[i] = exp(result[i]) / expsum;
+			}
+			break;
 		}
 		return result;
 	}
@@ -197,6 +249,15 @@ public:
 				cost[i] = cost[i] * exp(resultstore[i]) / pow((1 + exp(resultstore[i])), 2);
 			}
 			break;
+		case SOFTMAX:
+			float expsum = 0;
+			for (int i = 0; i < output; i++) {
+				expsum += exp(resultstore[i]);
+			}
+			for (int i = 0; i < output; i++) {
+				cost[i] = cost[i] * ((expsum - exp(resultstore[i])) * exp(resultstore[i]) / pow(expsum, 2));
+			}
+			break;
 		}
 		// transposes the weights so that they can be used to calculate the new costs
 		float** transposedw = Transpose(this->weights, this->output, this->input);
@@ -219,6 +280,13 @@ public:
 		float change = 0;
 		for (int i = 0; i < output; i++) {
 			change = this->alpha * this->biasesup[i] / batchsize + this->momentum * this->lastbiasesup[i];
+			if (this->biases[i] > 0) {
+				change += L1;
+			}
+			else {
+				change -= L1;
+			}
+			change += 2 * L2 * this->biases[i];
 			this->biases[i] -= change;
 			this->lastbiasesup[i] = change;
 			this->biasesup[i] = 0;
@@ -226,6 +294,13 @@ public:
 		for (int i = 0; i < input; i++) {
 			for (int t = 0; t < output; t++) {
 				change = this->alpha * this->weightsup[i][t] / batchsize + this->momentum * this->lastweightsup[i][t];
+				if (this->weights[i][t] > 0) {
+					change += L1;
+				}
+				else {
+					change -= L1;
+				}
+				change += 2 * L2 * this->weights[i][t];
 				this->weights[i][t] -= change;
 				this->lastweightsup[i][t] = change;
 				this->weightsup[i][t] = 0;
@@ -304,14 +379,22 @@ public:
 				this->cost[i] = temp * temp;
 			}
 			break;
+		case BCE:
+			for (int i = 0; i < this->out; i++) {
+				this->cost[i] = -(truevals[i] * log(this->result[i]) + (1 - truevals[i]) * log(1 - this->result[i]));
+			}
+			break;
+			// all bellow not to be used for anything but analyzing the network
 		case ACCURACY:
 			for (int i = 0; i < this->out; i++) {
 				this->cost[i] = ((result[i] - truevals[i]) * (result[i] - truevals[i]) < 0.25) ? 1 : 0;
 			}
+			break;
 		case LOSS:
 			for (int i = 0; i < this->out; i++) {
 				this->cost[i] = abs(result[i] - truevals[i]);
 			}
+			break;
 		}
 		return this->cost;
 	}
@@ -324,14 +407,48 @@ public:
 				this->cost[i] = temp * temp;
 			}
 			break;
-		case ACCURACY:
+		case BCE:
 			for (int i = 0; i < this->out; i++) {
-				this->cost[i] = ((result[i] - truevals[i]) * (result[i] - truevals[i]) < 0.25) ? 1 : 0;
+				this->cost[i] = -(truevals[i] * log(this->result[i]) + (1 - truevals[i]) * log(1 - this->result[i]));
 			}
+			break;
+			// all bellow not to be used for anything but analyzing the network
+		case ACCURACY:
+			if (this->out == 1) {
+				for (int i = 0; i < this->out; i++) {
+					this->cost[i] = ((result[i] - truevals[i]) * (result[i] - truevals[i]) < 0.25) ? 1 : 0;
+				}
+			}
+			else {
+				int maxind = 0;
+				float maxval = result[0];
+				int trueind = 0;
+				for (int i = 0; i < this->out; i++) {
+					if (maxval < result[i]) {
+						maxval = result[i];
+						maxind = i;
+					}
+					if (truevals[i] == 1) {
+						trueind = i;
+					}
+				}
+				if (trueind == maxind) {
+					for (int i = 0; i < this->out; i++) {
+						this->cost[i] = 1;
+					}
+				}
+				else {
+					for (int i = 0; i < this->out; i++) {
+						this->cost[i] = 0;
+					}
+				}
+			}
+			break;
 		case LOSS:
 			for (int i = 0; i < this->out; i++) {
 				this->cost[i] = abs(result[i] - truevals[i]);
 			}
+			break;
 		}
 		return this->cost;
 	}
@@ -341,6 +458,11 @@ public:
 		case MSE:
 			for (int i = 0; i < this->out; i++) {
 				this->dcost[i] = 2 * (result[i] - truevals[i]);
+			}
+			break;
+		case BCE:
+			for (int i = 0; i < this->out; i++) {
+				this->dcost[i] = -((result[i] - truevals[i]) / ((result[i] - 1) * result[i]));
 			}
 			break;
 		}
@@ -377,10 +499,17 @@ public:
 			for (int t = 0; t < outsize; t++) {
 				_true[t] = trues[i][t];
 			}
-			this->Pass(input);
+			float* out = this->Pass(input);
 			float* tempcost = this->CalculateAccuracy(_true);
-			for (int t = 0; t < outsize; t++) {
-				sumcost += tempcost[t];
+			if (this->accuracyfunc != ACCURACY) {
+				for (int t = 0; t < outsize; t++) {
+					sumcost += tempcost[t];
+				}
+			}
+			else {
+				for (int t = 0; t < outsize; t++) {
+					sumcost += tempcost[t] / outsize;
+				}
 			}
 		}
 		return sumcost / inpamount;
